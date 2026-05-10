@@ -3,6 +3,7 @@
 
 using System.Runtime.InteropServices;
 using System.Threading;
+using SharpEmu.HLE;
 
 namespace SharpEmu.Libs.Kernel;
 
@@ -25,12 +26,24 @@ internal static class KernelPthreadState
 
     internal static ulong GetCurrentThreadHandle()
     {
+        var guestThreadHandle = GuestThreadExecution.CurrentGuestThreadHandle;
+        if (guestThreadHandle != 0 && TryGetThreadIdentity(guestThreadHandle, out _))
+        {
+            return guestThreadHandle;
+        }
+
         EnsureCurrentThreadRegistered();
         return _currentThreadHandle;
     }
 
     internal static ulong GetCurrentThreadUniqueId()
     {
+        var guestThreadHandle = GuestThreadExecution.CurrentGuestThreadHandle;
+        if (guestThreadHandle != 0 && TryGetThreadIdentity(guestThreadHandle, out var identity))
+        {
+            return identity.UniqueId;
+        }
+
         EnsureCurrentThreadRegistered();
         return _currentThreadUniqueId;
     }

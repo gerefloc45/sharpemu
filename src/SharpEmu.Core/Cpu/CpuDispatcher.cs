@@ -193,6 +193,11 @@ public sealed class CpuDispatcher : ICpuDispatcher, IDisposable
             return FailEarly(OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
         }
 
+        if (!InitializeGuestFrameChainSentinel(context))
+        {
+            return FailEarly(OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        }
+
         if (!InitializeTls(context, tlsBase))
         {
             return FailEarly(OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
@@ -361,6 +366,23 @@ public sealed class CpuDispatcher : ICpuDispatcher, IDisposable
         return context.TryWriteUInt64(tlsBase + 0x00, tlsBase) &&
                context.TryWriteUInt64(tlsBase + 0x10, tlsBase) &&
                context.TryWriteUInt64(tlsBase + 0x28, 0xC0DEC0DECAFEBABEUL);
+    }
+
+    private static bool InitializeGuestFrameChainSentinel(CpuContext context)
+    {
+        var stackTop = context[CpuRegister.Rsp] + sizeof(ulong);
+        var sentinelFrame = AlignDown(stackTop - 0x20, 16);
+        var seedRsp = sentinelFrame - sizeof(ulong);
+        if (!context.TryWriteUInt64(sentinelFrame, 0) ||
+            !context.TryWriteUInt64(sentinelFrame + sizeof(ulong), 0) ||
+            !context.TryWriteUInt64(seedRsp, 0))
+        {
+            return false;
+        }
+
+        context[CpuRegister.Rbp] = sentinelFrame;
+        context[CpuRegister.Rsp] = seedRsp;
+        return true;
     }
 
     private static bool InitializeProcessEntryFrame(

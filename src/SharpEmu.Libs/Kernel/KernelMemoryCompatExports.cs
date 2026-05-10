@@ -42,6 +42,7 @@ public static class KernelMemoryCompatExports
     private const int SeekCur = 1;
     private const int SeekEnd = 2;
     private const ulong DirectMemorySizeBytes = 16384UL * 1024 * 1024;
+    private const ulong UnsetMainDirectMemoryPoolBase = ulong.MaxValue;
     private const ulong FlexibleMemorySizeBytes = 448UL * 1024 * 1024;
     private const int OrbisVirtualQueryInfoSize = 72;
     private const int OrbisKernelMaximumNameLength = 32;
@@ -93,6 +94,7 @@ public static class KernelMemoryCompatExports
     private static long _nextFileDescriptor = 2;
     private static ulong _nextPhysicalAddress;
     private static ulong _nextVirtualAddress;
+    private static ulong _mainDirectMemoryPoolBase = UnsetMainDirectMemoryPoolBase;
     private static ulong _allocatedFlexibleBytes;
     private static ulong _threadAtexitCountCallback;
     private static ulong _threadAtexitReportCallback;
@@ -1298,10 +1300,12 @@ public static class KernelMemoryCompatExports
             var hostPath = ResolveGuestPath(guestPath);
             if (!TryGetAprFileSize(hostPath, out var fileSize))
             {
+                LogIoTrace("apr_resolve", guestPath, $"host='{hostPath}' index={i} count={count} result=not_found");
                 return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_FOUND;
             }
 
             var fileId = AmprFileRegistry.Register(guestPath, hostPath);
+            LogIoTrace("apr_resolve", guestPath, $"host='{hostPath}' index={i} count={count} id=0x{fileId:X8} size={fileSize}");
 
             if (idsAddress != 0 &&
                 !TryWriteUInt32Compat(ctx, idsAddress + (i * sizeof(uint)), fileId))
@@ -1309,7 +1313,7 @@ public static class KernelMemoryCompatExports
                 return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
             }
 
-            if (!TryWriteUInt32Compat(ctx, sizesAddress + (i * sizeof(uint)), fileSize))
+            if (!TryWriteUInt64Compat(ctx, sizesAddress + (i * sizeof(ulong)), fileSize))
             {
                 return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
             }
@@ -1835,7 +1839,7 @@ public static class KernelMemoryCompatExports
         ulong selectedAddress;
         lock (_memoryGate)
         {
-            if (!TryAllocateDirectMemoryLocked(searchStart, searchEnd, length, align, memoryType, out selectedAddress))
+            if (!TryAllocateDirectMemoryLocked(searchStart, searchEnd, length, align, memoryType, DirectMemorySizeBytes, out selectedAddress))
             {
                 TraceDirectMemoryCall(
                     ctx,
@@ -1904,17 +1908,42 @@ public static class KernelMemoryCompatExports
         ulong aligned;
         lock (_memoryGate)
         {
-            if (!TryAllocateDirectMemoryLocked(0, DirectMemorySizeBytes, length, effectiveAlignment, memoryType, out aligned))
+            var allocationLimit = DirectMemorySizeBytes;
+            if (_mainDirectMemoryPoolBase != UnsetMainDirectMemoryPoolBase &&
+                !TryAddU64(_mainDirectMemoryPoolBase, DirectMemorySizeBytes, out allocationLimit))
             {
-                TraceDirectMemoryCall(
-                    ctx,
-                    "allocate_main_direct",
-                    length,
-                    effectiveAlignment,
-                    memoryType,
-                    outAddress,
-                    result: OrbisGen2Result.ORBIS_GEN2_ERROR_TRY_AGAIN);
-                return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_TRY_AGAIN;
+                allocationLimit = ulong.MaxValue;
+            }
+
+            if (!TryAllocateDirectMemoryLocked(0, allocationLimit, length, effectiveAlignment, memoryType, allocationLimit, out aligned))
+            {
+                var poolBase = _mainDirectMemoryPoolBase == UnsetMainDirectMemoryPoolBase
+                    ? AlignUp(GetDirectMemoryHighWaterMarkLocked(), effectiveAlignment)
+                    : _mainDirectMemoryPoolBase;
+
+                if (_mainDirectMemoryPoolBase == UnsetMainDirectMemoryPoolBase &&
+                    TryAddU64(poolBase, DirectMemorySizeBytes, out var shiftedLimit) &&
+                    TryAllocateDirectMemoryLocked(0, shiftedLimit, length, effectiveAlignment, memoryType, shiftedLimit, out aligned))
+                {
+                    _mainDirectMemoryPoolBase = poolBase;
+                    if (ShouldTraceDirectMemory())
+                    {
+                        Console.Error.WriteLine(
+                            $"[LOADER][TRACE] main_direct_pool: base=0x{poolBase:X16} limit=0x{shiftedLimit:X16}");
+                    }
+                }
+                else
+                {
+                    TraceDirectMemoryCall(
+                        ctx,
+                        "allocate_main_direct",
+                        length,
+                        effectiveAlignment,
+                        memoryType,
+                        outAddress,
+                        result: OrbisGen2Result.ORBIS_GEN2_ERROR_TRY_AGAIN);
+                    return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_TRY_AGAIN;
+                }
             }
         }
 
@@ -1986,8 +2015,11 @@ public static class KernelMemoryCompatExports
         var flags = ctx[CpuRegister.Rcx];
         var directMemoryStart = ctx[CpuRegister.R8];
         var alignment = ctx[CpuRegister.R9];
-        Console.Error.WriteLine(
-            $"[LOADER][TRACE] map_direct: inout=0x{inOutAddressPointer:X16} len=0x{length:X16} prot=0x{protection:X8} flags=0x{flags:X16} direct=0x{directMemoryStart:X16} align=0x{alignment:X16}");
+        if (ShouldTraceDirectMemory())
+        {
+            Console.Error.WriteLine(
+                $"[LOADER][TRACE] map_direct: inout=0x{inOutAddressPointer:X16} len=0x{length:X16} prot=0x{protection:X8} flags=0x{flags:X16} direct=0x{directMemoryStart:X16} align=0x{alignment:X16}");
+        }
         if (inOutAddressPointer == 0 || length == 0)
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
@@ -2018,8 +2050,11 @@ public static class KernelMemoryCompatExports
             {
                 reserved = TryReserveGuestVirtualRange(ctx, desiredAddress, length, protection, out mappedAddress);
             }
-            Console.Error.WriteLine(
-                $"[LOADER][TRACE] map_direct reserve: requested=0x{requestedAddress:X16} desired=0x{desiredAddress:X16} reserved={reserved} mapped=0x{mappedAddress:X16}");
+            if (ShouldTraceDirectMemory())
+            {
+                Console.Error.WriteLine(
+                    $"[LOADER][TRACE] map_direct reserve: requested=0x{requestedAddress:X16} desired=0x{desiredAddress:X16} reserved={reserved} mapped=0x{mappedAddress:X16}");
+            }
             if (!reserved)
             {
                 if (mappedAddress == 0)
@@ -2027,7 +2062,10 @@ public static class KernelMemoryCompatExports
                     mappedAddress = requestedAddress != 0
                         ? requestedAddress
                         : AllocateMappedGuestAddress(ctx, length, effectiveAlignment);
-                    Console.Error.WriteLine($"[LOADER][TRACE] map_direct fallback mapped=0x{mappedAddress:X16}");
+                    if (ShouldTraceDirectMemory())
+                    {
+                        Console.Error.WriteLine($"[LOADER][TRACE] map_direct fallback mapped=0x{mappedAddress:X16}");
+                    }
                 }
             }
 
@@ -3560,6 +3598,12 @@ public static class KernelMemoryCompatExports
         var app0Root = Environment.GetEnvironmentVariable("SHARPEMU_APP0_DIR");
         if (!string.IsNullOrWhiteSpace(app0Root))
         {
+            if (string.Equals(guestPath, "/app0", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(guestPath, "app0", StringComparison.OrdinalIgnoreCase))
+            {
+                return app0Root;
+            }
+
             if (guestPath.StartsWith("/app0/", StringComparison.OrdinalIgnoreCase))
             {
                 var relative = guestPath["/app0/".Length..].Replace('/', Path.DirectorySeparatorChar);
@@ -3569,6 +3613,14 @@ public static class KernelMemoryCompatExports
             if (guestPath.StartsWith("app0/", StringComparison.OrdinalIgnoreCase))
             {
                 var relative = guestPath["app0/".Length..].Replace('/', Path.DirectorySeparatorChar);
+                return Path.Combine(app0Root, relative);
+            }
+
+            if (!Path.IsPathFullyQualified(guestPath) &&
+                !guestPath.StartsWith("/", StringComparison.Ordinal) &&
+                !guestPath.StartsWith("\\", StringComparison.Ordinal))
+            {
+                var relative = guestPath.Replace('/', Path.DirectorySeparatorChar);
                 return Path.Combine(app0Root, relative);
             }
         }
@@ -4235,7 +4287,7 @@ public static class KernelMemoryCompatExports
         ulong selectedAddress = 0,
         OrbisGen2Result? result = null)
     {
-        if (!string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOG_DIRECT_MEMORY"), "1", StringComparison.Ordinal))
+        if (!ShouldTraceDirectMemory())
         {
             return;
         }
@@ -4251,12 +4303,18 @@ public static class KernelMemoryCompatExports
             $"[LOADER][TRACE] {operation}: ret=0x{returnRip:X16} len=0x{length:X16} align=0x{alignment:X16} type=0x{memoryType:X8} out=0x{outAddress:X16} selected=0x{selectedAddress:X16} result={result?.ToString() ?? "<pending>"}");
     }
 
+    private static bool ShouldTraceDirectMemory()
+    {
+        return string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOG_DIRECT_MEMORY"), "1", StringComparison.Ordinal);
+    }
+
     private static bool TryAllocateDirectMemoryLocked(
         ulong searchStart,
         ulong searchEnd,
         ulong length,
         ulong alignment,
         int memoryType,
+        ulong allocationLimit,
         out ulong selectedAddress)
     {
         selectedAddress = 0;
@@ -4266,7 +4324,7 @@ public static class KernelMemoryCompatExports
         }
 
         var effectiveAlignment = alignment == 0 ? 0x1000UL : alignment;
-        if (!TryFindAllocatableDirectMemoryRangeLocked(searchStart, searchEnd, length, effectiveAlignment, out var freePosition) ||
+        if (!TryFindAllocatableDirectMemoryRangeLocked(searchStart, searchEnd, length, effectiveAlignment, allocationLimit, out var freePosition) ||
             !TryAddU64(freePosition, length, out var endAddress))
         {
             return false;
@@ -4283,6 +4341,7 @@ public static class KernelMemoryCompatExports
         ulong searchEnd,
         ulong length,
         ulong alignment,
+        ulong allocationLimit,
         out ulong selectedAddress)
     {
         selectedAddress = 0;
@@ -4291,7 +4350,7 @@ public static class KernelMemoryCompatExports
             return false;
         }
 
-        var effectiveEnd = Math.Min(searchEnd, DirectMemorySizeBytes);
+        var effectiveEnd = Math.Min(searchEnd, allocationLimit);
         var candidate = AlignUp(searchStart, alignment);
         if (candidate >= effectiveEnd)
         {
@@ -4411,7 +4470,7 @@ public static class KernelMemoryCompatExports
         {
             if (!TryAddU64(allocation.Start, allocation.Length, out var endAddress))
             {
-                return DirectMemorySizeBytes;
+                return ulong.MaxValue;
             }
 
             if (endAddress > highWaterMark)
@@ -4420,7 +4479,7 @@ public static class KernelMemoryCompatExports
             }
         }
 
-        return Math.Min(highWaterMark, DirectMemorySizeBytes);
+        return highWaterMark;
     }
 
     private static bool TryReadHostMemory(ulong address, Span<byte> destination)
@@ -4817,7 +4876,7 @@ public static class KernelMemoryCompatExports
         return TryWriteHostPathStat(ctx, statAddress, hostPath, isDirectory);
     }
 
-    private static bool TryGetAprFileSize(string hostPath, out uint size)
+    private static bool TryGetAprFileSize(string hostPath, out ulong size)
     {
         size = 0;
         try
@@ -4834,7 +4893,7 @@ public static class KernelMemoryCompatExports
             }
 
             var length = new FileInfo(hostPath).Length;
-            size = length >= uint.MaxValue ? uint.MaxValue : (uint)length;
+            size = length < 0 ? 0UL : unchecked((ulong)length);
             return true;
         }
         catch

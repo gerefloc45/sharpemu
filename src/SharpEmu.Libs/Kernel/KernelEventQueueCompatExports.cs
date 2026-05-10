@@ -166,9 +166,16 @@ public static class KernelEventQueueCompatExports
     public static int KernelWaitEqueue(CpuContext ctx)
     {
         var outCountAddress = ctx[CpuRegister.Rcx];
+        var timeoutAddress = ctx[CpuRegister.R8];
         if (outCountAddress != 0 && !TryWriteUInt32(ctx, outCountAddress, 0))
         {
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+        }
+
+        if (timeoutAddress == 0 && GuestThreadExecution.RequestCurrentThreadBlock("sceKernelWaitEqueue"))
+        {
+            TraceEventQueue(ctx, "wait-block", ctx[CpuRegister.Rdi]);
+            return (int)OrbisGen2Result.ORBIS_GEN2_OK;
         }
 
         TraceEventQueue(ctx, "wait", ctx[CpuRegister.Rdi]);

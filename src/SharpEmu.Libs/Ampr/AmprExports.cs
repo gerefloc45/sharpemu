@@ -16,6 +16,9 @@ public static class AmprExports
     private const ulong CommandBufferAux0Offset = 0x18;
     private const ulong CommandBufferAux1Offset = 0x20;
     private const ulong ReadFileRecordSize = 0x30;
+    private const ulong KernelEventQueueRecordSize = 0x30;
+    private const uint ReadFileRecordType = 1;
+    private const uint KernelEventQueueRecordType = 2;
     private static readonly ConcurrentDictionary<ulong, CommandBufferState> _commandBuffers = new();
 
     private sealed class CommandBufferState
@@ -257,6 +260,108 @@ public static class AmprExports
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
 
+    [SysAbiExport(
+        Nid = "vWU-odnS+fU",
+        ExportName = "sceAmprMeasureCommandSizeReadFile",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAmpr")]
+    public static int MeasureCommandSizeReadFile(CpuContext ctx)
+    {
+        TraceAmpr(ctx, "measure_read_file", 0, ReadFileRecordSize, 0);
+        ctx[CpuRegister.Rax] = ReadFileRecordSize;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
+        Nid = "sSAUCCU1dv4",
+        ExportName = "sceAmprMeasureCommandSizeWriteKernelEventQueue_04_00",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAmpr")]
+    public static int MeasureCommandSizeWriteKernelEventQueue0400(CpuContext ctx)
+    {
+        TraceAmpr(ctx, "measure_write_equeue", 0, KernelEventQueueRecordSize, 0);
+        ctx[CpuRegister.Rax] = KernelEventQueueRecordSize;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
+        Nid = "tZDDEo2tE5k",
+        ExportName = "sceAmprCommandBufferGetSize",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAmpr")]
+    public static int CommandBufferGetSize(CpuContext ctx)
+    {
+        var commandBuffer = ctx[CpuRegister.Rdi];
+        if (commandBuffer == 0)
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+        }
+
+        if (!TryGetCommandBufferState(ctx, commandBuffer, out _, out var size, out _))
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+        }
+
+        TraceAmpr(ctx, "get_size", commandBuffer, size, 0);
+        ctx[CpuRegister.Rax] = size;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
+        Nid = "GnxKOHEawhk",
+        ExportName = "sceAmprCommandBufferGetCurrentOffset",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAmpr")]
+    public static int CommandBufferGetCurrentOffset(CpuContext ctx)
+    {
+        var commandBuffer = ctx[CpuRegister.Rdi];
+        if (commandBuffer == 0)
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+        }
+
+        if (!TryGetCommandBufferOffset(ctx, commandBuffer, out var offset))
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+        }
+
+        TraceAmpr(ctx, "get_offset", commandBuffer, offset, 0);
+        ctx[CpuRegister.Rax] = offset;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
+        Nid = "H896Pt-yB4I",
+        ExportName = "sceAmprCommandBufferWriteKernelEventQueue_04_00",
+        Target = Generation.Gen5,
+        LibraryName = "libSceAmpr")]
+    public static int CommandBufferWriteKernelEventQueue0400(CpuContext ctx)
+    {
+        var commandBuffer = ctx[CpuRegister.Rdi];
+        var equeue = ctx[CpuRegister.Rsi];
+        var ident = ctx[CpuRegister.Rdx];
+        var filter = ctx[CpuRegister.Rcx];
+        var userData = ctx[CpuRegister.R8];
+        var data = ctx[CpuRegister.R9];
+
+        if (commandBuffer == 0)
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+        }
+
+        var extra = 0UL;
+        _ = ctx.TryReadUInt64(ctx[CpuRegister.Rsp] + sizeof(ulong), out extra);
+
+        if (!AppendKernelEventQueueRecord(ctx, commandBuffer, equeue, ident, filter, userData, data, extra))
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+        }
+
+        TraceAmpr(ctx, "write_equeue", commandBuffer, equeue, ident);
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
     private static bool InitializeCommandBuffer(
         CpuContext ctx,
         ulong commandBuffer,
@@ -350,6 +455,22 @@ public static class AmprExports
         return false;
     }
 
+    private static bool TryGetCommandBufferOffset(CpuContext ctx, ulong commandBuffer, out ulong offset)
+    {
+        if (!TryGetCommandBufferState(ctx, commandBuffer, out _, out _, out var state) || state is null)
+        {
+            offset = 0;
+            return false;
+        }
+
+        lock (state)
+        {
+            offset = state.WriteOffset;
+        }
+
+        return true;
+    }
+
     private static int TryReadFileToGuestMemory(
         CpuContext ctx,
         string hostPath,
@@ -420,23 +541,54 @@ public static class AmprExports
         ulong fileOffset,
         ulong bytesRead)
     {
-        if (!TryGetCommandBufferState(ctx, commandBuffer, out var buffer, out var capacity, out var state) || state is null)
-        {
-            return false;
-        }
-
         Span<byte> record = stackalloc byte[(int)ReadFileRecordSize];
         record.Clear();
-        BinaryPrimitives.WriteUInt32LittleEndian(record[0x00..], 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(record[0x00..], ReadFileRecordType);
         BinaryPrimitives.WriteUInt32LittleEndian(record[0x04..], fileId);
         BinaryPrimitives.WriteUInt64LittleEndian(record[0x08..], destination);
         BinaryPrimitives.WriteUInt64LittleEndian(record[0x10..], size);
         BinaryPrimitives.WriteUInt64LittleEndian(record[0x18..], fileOffset);
         BinaryPrimitives.WriteUInt64LittleEndian(record[0x20..], bytesRead);
 
+        return AppendCommandBufferRecord(ctx, commandBuffer, record);
+    }
+
+    private static bool AppendKernelEventQueueRecord(
+        CpuContext ctx,
+        ulong commandBuffer,
+        ulong equeue,
+        ulong ident,
+        ulong filter,
+        ulong userData,
+        ulong data,
+        ulong extra)
+    {
+        Span<byte> record = stackalloc byte[(int)KernelEventQueueRecordSize];
+        record.Clear();
+        BinaryPrimitives.WriteUInt32LittleEndian(record[0x00..], KernelEventQueueRecordType);
+        BinaryPrimitives.WriteUInt32LittleEndian(record[0x04..], unchecked((uint)filter));
+        BinaryPrimitives.WriteUInt64LittleEndian(record[0x08..], equeue);
+        BinaryPrimitives.WriteUInt64LittleEndian(record[0x10..], ident);
+        BinaryPrimitives.WriteUInt64LittleEndian(record[0x18..], userData);
+        BinaryPrimitives.WriteUInt64LittleEndian(record[0x20..], data);
+        BinaryPrimitives.WriteUInt64LittleEndian(record[0x28..], extra);
+
+        return AppendCommandBufferRecord(ctx, commandBuffer, record);
+    }
+
+    private static bool AppendCommandBufferRecord(CpuContext ctx, ulong commandBuffer, ReadOnlySpan<byte> record)
+    {
+        if (!TryGetCommandBufferState(ctx, commandBuffer, out _, out _, out var state) || state is null)
+        {
+            return false;
+        }
+
+        var recordSize = (ulong)record.Length;
         lock (state)
         {
-            if (state.Buffer == 0 || state.WriteOffset + ReadFileRecordSize > state.Size)
+            if (state.Buffer == 0 ||
+                state.WriteOffset > state.Size ||
+                recordSize > state.Size - state.WriteOffset)
             {
                 return false;
             }
@@ -446,7 +598,7 @@ public static class AmprExports
                 return false;
             }
 
-            state.WriteOffset += ReadFileRecordSize;
+            state.WriteOffset += recordSize;
         }
 
         return true;

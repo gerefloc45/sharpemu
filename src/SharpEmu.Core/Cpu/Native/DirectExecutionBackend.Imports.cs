@@ -302,6 +302,23 @@ public sealed partial class DirectExecutionBackend
 			_cpuContext[CpuRegister.R15] = value8;
 			_cpuContext[CpuRegister.Rdi] = value;
 			_cpuContext[CpuRegister.Rsi] = value2;
+			if (GuestThreadExecution.TryConsumeCurrentEntryExit(out var exitStatus, out var exitReason))
+			{
+				if (TryCompleteGuestEntryToHostStub(argPackPtr, num, num7, importStubEntry.Nid, exitReason, exitStatus))
+				{
+					_cpuContext[CpuRegister.Rax] = unchecked((ulong)exitStatus);
+				}
+				else
+				{
+					LastError = $"Failed to complete guest entry after {importStubEntry.Nid}: missing host return sentinel";
+					_cpuContext[CpuRegister.Rax] = 18446744071562199298uL;
+				}
+			}
+			if (GuestThreadExecution.TryConsumeCurrentThreadBlock(out var blockReason) &&
+				TryYieldGuestThreadToHostStub(argPackPtr, num, num7, importStubEntry.Nid, blockReason))
+			{
+				_cpuContext[CpuRegister.Rax] = 0uL;
+			}
 			if (flag || flag2 || flag3)
 			{
 				Console.Error.WriteLine($"[LOADER][TRACE] ImportRet#{num}: nid={importStubEntry.Nid} result={orbisGen2Result} rax=0x{_cpuContext[CpuRegister.Rax]:X16}");
@@ -339,6 +356,49 @@ public sealed partial class DirectExecutionBackend
 		LastError = $"Detected repeating import loop at import#{dispatchIndex} ({nid}) and forced guest exit.";
 		Console.Error.WriteLine($"[LOADER][ERROR] Import-loop guard fired at import#{dispatchIndex}: nid={nid} ret=0x{returnRip:X16} -> host_exit=0x{num:X16}");
 		DumpRecentImportTrace();
+		return true;
+	}
+
+	private unsafe bool TryCompleteGuestEntryToHostStub(nint argPackPtr, long dispatchIndex, ulong returnRip, string nid, string reason, int status)
+	{
+		ulong hostExit = _entryReturnSentinelRip;
+		if (hostExit < 65536)
+		{
+			return false;
+		}
+		try
+		{
+			*(ulong*)(argPackPtr + 96) = hostExit;
+		}
+		catch
+		{
+			return false;
+		}
+		Console.Error.WriteLine(
+			$"[LOADER][INFO] Guest entry exit at import#{dispatchIndex}: nid={nid} ret=0x{returnRip:X16} reason={reason} status={status}");
+		return true;
+	}
+
+	private unsafe bool TryYieldGuestThreadToHostStub(nint argPackPtr, long dispatchIndex, ulong returnRip, string nid, string reason)
+	{
+		ulong hostExit = _entryReturnSentinelRip;
+		if (hostExit < 65536)
+		{
+			return false;
+		}
+		try
+		{
+			*(ulong*)(argPackPtr + 96) = hostExit;
+		}
+		catch
+		{
+			return false;
+		}
+
+		_guestThreadYieldRequested = true;
+		_guestThreadYieldReason = string.IsNullOrWhiteSpace(reason) ? nid : reason;
+		Console.Error.WriteLine(
+			$"[LOADER][INFO] Guest thread yield at import#{dispatchIndex}: nid={nid} ret=0x{returnRip:X16} reason={_guestThreadYieldReason}");
 		return true;
 	}
 

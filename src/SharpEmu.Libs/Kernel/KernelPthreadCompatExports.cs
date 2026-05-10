@@ -18,6 +18,7 @@ public static class KernelPthreadCompatExports
     private const ulong SyntheticMutexHandleBase = 0x00006000_0000_0000;
     private const ulong SyntheticMutexAttrHandleBase = 0x00006001_0000_0000;
     private const ulong SyntheticCondHandleBase = 0x00006002_0000_0000;
+    private const int DefaultSpuriousCondWakeMilliseconds = 1;
 
     private static readonly object _stateGate = new();
     private static readonly Dictionary<ulong, PthreadMutexState> _mutexStates = new();
@@ -887,6 +888,7 @@ public static class KernelPthreadCompatExports
         }
 
         var waitResult = (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        var spuriousWake = false;
         lock (state.SyncRoot)
         {
             state.Waiters++;
@@ -901,11 +903,36 @@ public static class KernelPthreadCompatExports
                 return unlockResult;
             }
 
+            var scheduler = GuestThreadExecution.Scheduler;
+            if (!timed && GuestThreadExecution.RequestCurrentThreadBlock("pthread_cond_wait"))
+            {
+                TracePthreadCond("wait-block", condAddress, mutexAddress, state, timed, waitResult);
+                return waitResult;
+            }
+
+            if (scheduler is not null)
+            {
+                Monitor.Exit(state.SyncRoot);
+                try
+                {
+                    scheduler.Pump(ctx, "pthread_cond_wait");
+                }
+                finally
+                {
+                    Monitor.Enter(state.SyncRoot);
+                }
+            }
+
             while (state.SignalEpoch == observedEpoch)
             {
                 if (!timed)
                 {
-                    Monitor.Wait(state.SyncRoot);
+                    if (!Monitor.Wait(state.SyncRoot, GetCondSpuriousWakeTimeout()))
+                    {
+                        spuriousWake = true;
+                        break;
+                    }
+
                     continue;
                 }
 
@@ -917,7 +944,15 @@ public static class KernelPthreadCompatExports
             }
 
             state.Waiters = Math.Max(0, state.Waiters - 1);
-            TracePthreadCond(waitResult == (int)OrbisGen2Result.ORBIS_GEN2_OK ? "wait-wake" : "wait-timeout", condAddress, mutexAddress, state, timed, waitResult);
+            TracePthreadCond(
+                spuriousWake
+                    ? "wait-spurious"
+                    : (waitResult == (int)OrbisGen2Result.ORBIS_GEN2_OK ? "wait-wake" : "wait-timeout"),
+                condAddress,
+                mutexAddress,
+                state,
+                timed,
+                waitResult);
         }
 
         var lockResult = PthreadMutexLockCore(ctx, mutexAddress, tryOnly: false);
@@ -927,7 +962,15 @@ public static class KernelPthreadCompatExports
             return lockResult;
         }
 
-        TracePthreadCond(waitResult == (int)OrbisGen2Result.ORBIS_GEN2_OK ? "wait-exit" : "wait-exit-timeout", condAddress, mutexAddress, state, timed, waitResult);
+        TracePthreadCond(
+            spuriousWake
+                ? "wait-exit-spurious"
+                : (waitResult == (int)OrbisGen2Result.ORBIS_GEN2_OK ? "wait-exit" : "wait-exit-timeout"),
+            condAddress,
+            mutexAddress,
+            state,
+            timed,
+            waitResult);
         return waitResult;
     }
 
@@ -972,6 +1015,16 @@ public static class KernelPthreadCompatExports
         }
 
         return TimeSpan.FromTicks((long)timeoutUsec * 10L);
+    }
+
+    private static TimeSpan GetCondSpuriousWakeTimeout()
+    {
+        if (int.TryParse(Environment.GetEnvironmentVariable("SHARPEMU_PTHREAD_COND_SPURIOUS_WAKE_MS"), out var milliseconds))
+        {
+            return TimeSpan.FromMilliseconds(Math.Max(1, milliseconds));
+        }
+
+        return TimeSpan.FromMilliseconds(DefaultSpuriousCondWakeMilliseconds);
     }
 
     private static int NormalizeMutexType(int type)

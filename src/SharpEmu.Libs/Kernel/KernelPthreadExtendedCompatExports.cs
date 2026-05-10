@@ -20,6 +20,7 @@ public static class KernelPthreadExtendedCompatExports
     private const int DefaultSchedPolicy = 0;
     private const int DefaultSchedPriority = 0;
     private const ulong SyntheticRwlockHandleBase = 0x00006003_0000_0000;
+    private const ulong SyntheticPthreadAttrHandleBase = 0x00006004_0000_0000;
 
     private static readonly object _stateGate = new();
     private static readonly Dictionary<ulong, ThreadState> _threadStates = new();
@@ -28,6 +29,7 @@ public static class KernelPthreadExtendedCompatExports
     private static readonly Dictionary<int, TlsKeyState> _tlsKeys = new();
     private static int _nextTlsKey = 1;
     private static long _nextSyntheticRwlockHandleId = 1;
+    private static long _nextSyntheticPthreadAttrHandleId = 1;
 
     private static readonly Dictionary<ulong, Dictionary<int, ulong>> _threadLocalSpecific = new();
 
@@ -236,6 +238,41 @@ public static class KernelPthreadExtendedCompatExports
     }
 
     [SysAbiExport(
+        Nid = "Xs9hdiD7sAA",
+        ExportName = "pthread_setschedparam",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libKernel")]
+    public static int PosixPthreadSetschedparam(CpuContext ctx)
+    {
+        var thread = ctx[CpuRegister.Rdi];
+        var policy = unchecked((int)ctx[CpuRegister.Rsi]);
+        var schedParamAddress = ctx[CpuRegister.Rdx];
+        if (thread == 0 || schedParamAddress == 0)
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+        }
+
+        if (!TryReadInt32(ctx, schedParamAddress, out var schedPriority))
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+        }
+
+        lock (_stateGate)
+        {
+            var state = GetOrCreateThreadStateLocked(thread);
+            state.Priority = schedPriority;
+            state.Attributes = state.Attributes with
+            {
+                SchedPolicy = policy,
+                SchedPriority = schedPriority,
+            };
+        }
+
+        ctx[CpuRegister.Rax] = 0;
+        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
         Nid = "nsYoNRywwNg",
         ExportName = "scePthreadAttrInit",
         Target = Generation.Gen4 | Generation.Gen5,
@@ -248,13 +285,30 @@ public static class KernelPthreadExtendedCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
+        var syntheticHandle = AllocateSyntheticHandle(SyntheticPthreadAttrHandleBase, ref _nextSyntheticPthreadAttrHandleId);
+        if (!ctx.TryWriteUInt64(attrAddress, syntheticHandle))
+        {
+            return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
+        }
+
         lock (_stateGate)
         {
             _attrStates[attrAddress] = PthreadAttrState.Default;
+            _attrStates[syntheticHandle] = PthreadAttrState.Default;
         }
 
         ctx[CpuRegister.Rax] = 0;
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
+        Nid = "wtkt-teR1so",
+        ExportName = "pthread_attr_init",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libKernel")]
+    public static int PosixPthreadAttrInit(CpuContext ctx)
+    {
+        return PthreadAttrInit(ctx);
     }
 
     [SysAbiExport(
@@ -270,13 +324,29 @@ public static class KernelPthreadExtendedCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
+        var resolvedAddress = ResolvePthreadAttrHandle(ctx, attrAddress);
         lock (_stateGate)
         {
             _attrStates.Remove(attrAddress);
+            if (resolvedAddress != attrAddress)
+            {
+                _attrStates.Remove(resolvedAddress);
+            }
         }
 
+        _ = ctx.TryWriteUInt64(attrAddress, 0);
         ctx[CpuRegister.Rax] = 0;
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
+        Nid = "zHchY8ft5pk",
+        ExportName = "pthread_attr_destroy",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libKernel")]
+    public static int PosixPthreadAttrDestroy(CpuContext ctx)
+    {
+        return PthreadAttrDestroy(ctx);
     }
 
     [SysAbiExport(
@@ -611,14 +681,30 @@ public static class KernelPthreadExtendedCompatExports
             return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
         }
 
+        var resolvedAddress = ResolvePthreadAttrHandle(ctx, attrAddress);
         lock (_stateGate)
         {
-            var state = GetOrCreateAttrStateLocked(attrAddress);
-            _attrStates[attrAddress] = state with { StackSize = stackSize };
+            var state = GetOrCreateAttrStateLocked(resolvedAddress);
+            var updated = state with { StackSize = stackSize };
+            _attrStates[resolvedAddress] = updated;
+            if (resolvedAddress != attrAddress)
+            {
+                _attrStates[attrAddress] = updated;
+            }
         }
 
         ctx[CpuRegister.Rax] = 0;
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+    }
+
+    [SysAbiExport(
+        Nid = "2Q0z6rnBrTE",
+        ExportName = "pthread_attr_setstacksize",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libKernel")]
+    public static int PosixPthreadAttrSetstacksize(CpuContext ctx)
+    {
+        return PthreadAttrSetstacksize(ctx);
     }
 
     [SysAbiExport(
@@ -1129,6 +1215,35 @@ public static class KernelPthreadExtendedCompatExports
         state = PthreadAttrState.Default;
         _attrStates[attrAddress] = state;
         return state;
+    }
+
+    private static ulong ResolvePthreadAttrHandle(CpuContext ctx, ulong attrAddress)
+    {
+        if (attrAddress == 0)
+        {
+            return 0;
+        }
+
+        lock (_stateGate)
+        {
+            if (_attrStates.ContainsKey(attrAddress))
+            {
+                return attrAddress;
+            }
+        }
+
+        if (ctx.TryReadUInt64(attrAddress, out var pointedHandle) && pointedHandle != 0)
+        {
+            lock (_stateGate)
+            {
+                if (_attrStates.ContainsKey(pointedHandle))
+                {
+                    return pointedHandle;
+                }
+            }
+        }
+
+        return attrAddress;
     }
 
     private static bool TryWriteFixedUtf8CString(CpuContext ctx, ulong address, string value, int maxBytes)

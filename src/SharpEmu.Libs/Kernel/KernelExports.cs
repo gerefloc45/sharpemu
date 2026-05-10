@@ -55,7 +55,10 @@ public static class KernelExports
         LibraryName = "libKernel")]
     public static int Exit(CpuContext ctx)
     {
-        _ = ctx;
+        var status = unchecked((int)ctx[CpuRegister.Rdi]);
+        Console.Error.WriteLine($"[LOADER][INFO] exit(status={status})");
+        GuestThreadExecution.RequestCurrentEntryExit("exit", status);
+        ctx[CpuRegister.Rax] = unchecked((ulong)status);
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
 
@@ -68,7 +71,8 @@ public static class KernelExports
     {
         var status = unchecked((int)ctx[CpuRegister.Rdi]);
         Console.Error.WriteLine($"[LOADER][INFO] catchReturnFromMain(status={status})");
-        ctx[CpuRegister.Rax] = 0;
+        GuestThreadExecution.RequestCurrentEntryExit("catchReturnFromMain", status);
+        ctx[CpuRegister.Rax] = unchecked((ulong)status);
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
 
@@ -211,6 +215,19 @@ public static class KernelExports
                 $"[LOADER][TRACE] pthread_create: out=0x{threadIdAddress:X16} attr=0x{attrAddress:X16} entry=0x{entryAddress:X16} arg=0x{argument:X16} name_ptr=0x{nameAddress:X16} name='{name}' -> thread=0x{threadHandle:X16}");
         }
 
+        var scheduler = GuestThreadExecution.Scheduler;
+        if (scheduler is not null && entryAddress != 0)
+        {
+            var request = new GuestThreadStartRequest(threadHandle, entryAddress, argument, attrAddress, name);
+            if (!scheduler.TryStartThread(ctx, request, out var error))
+            {
+                Console.Error.WriteLine(
+                    $"[LOADER][ERROR] pthread_create: failed to schedule guest thread '{name}' entry=0x{entryAddress:X16}: {error}");
+                ctx[CpuRegister.Rax] = unchecked((ulong)(int)OrbisGen2Result.ORBIS_GEN2_ERROR_TRY_AGAIN);
+                return (int)OrbisGen2Result.ORBIS_GEN2_ERROR_TRY_AGAIN;
+            }
+        }
+
         ctx[CpuRegister.Rax] = 0;
         return (int)OrbisGen2Result.ORBIS_GEN2_OK;
     }
@@ -221,6 +238,16 @@ public static class KernelExports
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libKernel")]
     public static int PosixPthreadCreate(CpuContext ctx)
+    {
+        return PthreadCreate(ctx);
+    }
+
+    [SysAbiExport(
+        Nid = "Jmi+9w9u0E4",
+        ExportName = "pthread_create_name_np",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libKernel")]
+    public static int PosixPthreadCreateNameNp(CpuContext ctx)
     {
         return PthreadCreate(ctx);
     }
