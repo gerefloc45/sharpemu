@@ -20,8 +20,33 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
   <Grid RowDefinitions="Auto,*,Auto">
 
-    <!-- Selected-game backdrop: key art behind the main content, dimmed by
-         a scrim so tiles and text stay readable. Fades on selection. -->
+    <!-- Ambient glow layer: two soft radial pools of light behind the whole
+         window, the signature PS5 home-screen depth. Non-interactive and
+         drawn first, so everything else sits on top. -->
+    <Panel Grid.Row="0" Grid.RowSpan="3" IsHitTestVisible="False">
+      <Ellipse Width="1500" Height="1100" HorizontalAlignment="Left" VerticalAlignment="Top"
+               Margin="-360,-380,0,0">
+        <Ellipse.Fill>
+          <RadialGradientBrush>
+            <GradientStop Offset="0" Color="#3A2C5AA8" />
+            <GradientStop Offset="1" Color="#002C5AA8" />
+          </RadialGradientBrush>
+        </Ellipse.Fill>
+      </Ellipse>
+      <Ellipse Width="1300" Height="1000" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+               Margin="0,0,-320,-340">
+        <Ellipse.Fill>
+          <RadialGradientBrush>
+            <GradientStop Offset="0" Color="#242A6E8C" />
+            <GradientStop Offset="1" Color="#002A6E8C" />
+          </RadialGradientBrush>
+        </Ellipse.Fill>
+      </Ellipse>
+    </Panel>
+
+    <!-- Selected-game backdrop: key art behind the main content, PS5-style —
+         mostly visible up top where only tiles sit, darkening toward the
+         bottom so the hero title and controls stay readable. -->
     <Panel Grid.Row="1" ClipToBounds="True">
       <Image x:Name="BackdropImage" Stretch="UniformToFill" Opacity="0"
              HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -34,18 +59,22 @@ SPDX-License-Identifier: GPL-2.0-or-later
       <Border>
         <Border.Background>
           <LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Offset="0" Color="#730D1017" />
-            <GradientStop Offset="0.55" Color="#BF0D1017" />
-            <GradientStop Offset="1" Color="#EB0D1017" />
+            <GradientStop Offset="0" Color="#120B121D" />
+            <GradientStop Offset="0.45" Color="#5E0B121D" />
+            <GradientStop Offset="0.8" Color="#C40B121D" />
+            <GradientStop Offset="1" Color="#F00B121D" />
           </LinearGradientBrush>
         </Border.Background>
       </Border>
     </Panel>
 
     <!-- Title bar; hidden in fullscreen (F11) along with the status bar, so
-         the game gets the whole screen. -->
-    <Grid x:Name="TitleBar" Grid.Row="0" Height="44" Background="{StaticResource ChromeBrush}">
-      <StackPanel Orientation="Horizontal" Spacing="10" Margin="16,0" VerticalAlignment="Center">
+         the game gets the whole screen. Transparent so the key art bleeds
+         to the very top like the console home screen; the clock lives on
+         the right, PS5-style. -->
+    <Grid x:Name="TitleBar" Grid.Row="0" Height="44" Background="Transparent"
+          ColumnDefinitions="Auto,*,Auto">
+      <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10" Margin="16,0" VerticalAlignment="Center">
         <Image Source="avares://SharpEmu.GUI/Assets/SharpEmu.ico" Width="20" Height="20"
                RenderOptions.BitmapInterpolationMode="HighQuality" />
         <TextBlock Text="SharpEmu" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
@@ -53,6 +82,8 @@ SPDX-License-Identifier: GPL-2.0-or-later
           <TextBlock x:Name="VersionText" Text="v0.0.1" FontSize="11" Foreground="{StaticResource MutedBrush}" />
         </Border>
       </StackPanel>
+      <TextBlock Grid.Column="2" x:Name="ClockText" Text="" FontSize="15" FontWeight="SemiBold"
+                 VerticalAlignment="Center" Margin="0,0,150,0" />
     </Grid>
 
     <!-- Main content -->
@@ -74,23 +105,28 @@ SPDX-License-Identifier: GPL-2.0-or-later
           </Border>
         </StackPanel>
 
-        <StackPanel Grid.Column="2" x:Name="LibraryToolbar" Orientation="Horizontal" Spacing="8"
+        <StackPanel Grid.Column="2" x:Name="LibraryToolbar" Orientation="Horizontal" Spacing="10"
                     VerticalAlignment="Center">
-          <TextBox x:Name="SearchBox" Watermark="Search library…" Width="240" VerticalAlignment="Center" />
-          <Button x:Name="AddFolderButton" Classes="ghost" Content="＋ Add folder" VerticalAlignment="Center" />
-          <Button x:Name="RescanButton" Classes="ghost" Content="⟳ Rescan" VerticalAlignment="Center" />
-          <Button x:Name="OpenFileButton" Classes="ghost" Content="Open file…" VerticalAlignment="Center" />
+          <TextBox x:Name="SearchBox" Watermark="🔍  Search library…" Width="240" VerticalAlignment="Center" />
+          <Button x:Name="AddFolderButton" Classes="iconCircle" Content="＋" VerticalAlignment="Center"
+                  ToolTip.Tip="Add game folder" />
+          <Button x:Name="RescanButton" Classes="iconCircle" Content="⟳" VerticalAlignment="Center"
+                  ToolTip.Tip="Rescan library" />
+          <Button x:Name="OpenFileButton" Classes="iconCircle" Content="📂" VerticalAlignment="Center"
+                  ToolTip.Tip="Open eboot.bin / .elf directly" />
         </StackPanel>
       </Grid>
 
       <Panel Grid.Row="1">
 
-        <!-- Library page. The tile row gets extra top margin so it sits
-             closer to eye level (PS5 home-screen style) instead of hugging
-             the Library/Options switcher above it. -->
-        <Panel x:Name="LibraryPage" Margin="0,64,0,0">
+        <!-- Library page: a single PS5-style horizontal strip of square
+             covers near the top; the selected game's art fills the backdrop
+             and its title renders large in the hero bar below. -->
+        <Panel x:Name="LibraryPage" Margin="0,36,0,0">
           <ListBox x:Name="GameList" Classes="tileGrid" Background="Transparent"
-                   SelectionMode="Single" Padding="0">
+                   SelectionMode="Single" Padding="12,8" VerticalAlignment="Top"
+                   ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                   ScrollViewer.VerticalScrollBarVisibility="Disabled">
             <ListBox.ContextMenu>
               <ContextMenu x:Name="GameContextMenu" Placement="Pointer">
                 <MenuItem x:Name="CtxLaunch" Header="Launch" FontWeight="SemiBold">
@@ -129,42 +165,44 @@ SPDX-License-Identifier: GPL-2.0-or-later
             </ListBox.ContextMenu>
             <ListBox.ItemsPanel>
               <ItemsPanelTemplate>
-                <WrapPanel />
+                <StackPanel Orientation="Horizontal" />
               </ItemsPanelTemplate>
             </ListBox.ItemsPanel>
+            <!-- Bare square covers, no caption: like the PS5 strip, the game
+                 name only appears in the hero bar for the selected tile. -->
             <ListBox.ItemTemplate>
               <DataTemplate>
-                <StackPanel Width="128" Height="172" Spacing="7">
-                  <Border Classes="coverShadow" Width="128" Height="128">
-                    <Border Classes="coverClip">
-                      <Panel>
-                        <Border Background="{Binding PlaceholderBrush}" IsVisible="{Binding !HasCover}">
-                          <TextBlock Text="{Binding Initials}" FontSize="36" FontWeight="Bold"
-                                     Foreground="#E8ECF4" Opacity="0.85"
-                                     HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <Image Source="{Binding Cover}" Stretch="UniformToFill" IsVisible="{Binding HasCover}" />
-                      </Panel>
-                    </Border>
+                <Border Classes="coverShadow" Width="150" Height="150">
+                  <Border Classes="coverClip">
+                    <Panel>
+                      <Border Background="{Binding PlaceholderBrush}" IsVisible="{Binding !HasCover}">
+                        <TextBlock Text="{Binding Initials}" FontSize="42" FontWeight="Bold"
+                                   Foreground="#E8ECF4" Opacity="0.85"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      </Border>
+                      <Image Source="{Binding Cover}" Stretch="UniformToFill" IsVisible="{Binding HasCover}" />
+                    </Panel>
                   </Border>
-                  <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
-                             TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
-                             TextAlignment="Center" HorizontalAlignment="Center" />
-                </StackPanel>
+                </Border>
               </DataTemplate>
             </ListBox.ItemTemplate>
           </ListBox>
 
           <!-- Empty state -->
-          <StackPanel x:Name="EmptyState" Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center"
+          <StackPanel x:Name="EmptyState" Spacing="14" HorizontalAlignment="Center" VerticalAlignment="Center"
                       IsVisible="False">
-            <TextBlock Text="🎮" FontSize="44" HorizontalAlignment="Center" Opacity="0.7" />
-            <TextBlock x:Name="EmptyStateTitle" Text="Your library is empty" FontSize="18" FontWeight="SemiBold"
-                       HorizontalAlignment="Center" />
+            <Border Width="120" Height="120" CornerRadius="999" Background="#14FFFFFF"
+                    HorizontalAlignment="Center">
+              <TextBlock Text="🎮" FontSize="56" HorizontalAlignment="Center" VerticalAlignment="Center"
+                         Opacity="0.85" />
+            </Border>
+            <TextBlock x:Name="EmptyStateTitle" Text="Your library is empty" FontSize="26" FontWeight="Bold"
+                       HorizontalAlignment="Center" Margin="0,6,0,0" />
             <TextBlock x:Name="EmptyStateHint" Text="Add a folder containing your games to get started."
-                       FontSize="13" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center" />
-            <Button x:Name="EmptyAddFolderButton" Classes="accent" Content="＋ Add game folder"
-                    HorizontalAlignment="Center" Margin="0,8,0,0" />
+                       FontSize="14" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center"
+                       TextAlignment="Center" MaxWidth="420" TextWrapping="Wrap" />
+            <Button x:Name="EmptyAddFolderButton" Classes="play" Content="＋  Add game folder"
+                    HorizontalAlignment="Center" Margin="0,12,0,0" />
           </StackPanel>
 
           <!-- Loading state: covers the grid while a scan (initial load,
@@ -387,6 +425,123 @@ SPDX-License-Identifier: GPL-2.0-or-later
                 </StackPanel>
               </ScrollViewer>
             </TabItem>
+            <TabItem x:Name="ControllerTabItem" Header="🎮  Controller" FontSize="15">
+              <ScrollViewer>
+                <StackPanel Margin="0,14,0,16" Spacing="16" MaxWidth="1280" HorizontalAlignment="Left">
+
+                  <!-- Auto-detection: shows the connected pad, or a prompt to
+                       plug one in. Updated live from the gamepad poll. -->
+                  <Border Classes="card">
+                    <Grid ColumnDefinitions="Auto,*">
+                      <Border Grid.Column="0" Width="76" Height="76" CornerRadius="999" Background="#14FFFFFF"
+                              VerticalAlignment="Center">
+                        <TextBlock Text="🎮" FontSize="38" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      </Border>
+                      <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="4" Margin="18,0,0,0">
+                        <TextBlock Classes="sectionTitle" Text="DETECTION" />
+                        <StackPanel Orientation="Horizontal" Spacing="9">
+                          <Ellipse x:Name="ControllerStatusDot" Width="10" Height="10"
+                                   Fill="{StaticResource FaintBrush}" VerticalAlignment="Center" />
+                          <TextBlock x:Name="ControllerStatusText" Text="Detecting…" FontSize="16"
+                                     FontWeight="SemiBold" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock x:Name="ControllerStatusDetail"
+                                   Text="Connect a DualSense or Xbox controller — it is detected automatically."
+                                   FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </Grid>
+                  </Border>
+
+                  <!-- Live button tester -->
+                  <Border Classes="card">
+                    <StackPanel Spacing="16">
+                      <TextBlock Classes="sectionTitle" Text="BUTTON TEST" />
+                      <TextBlock Text="Press buttons on your controller to see them light up."
+                                 FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" />
+
+                      <!-- Face buttons + D-pad -->
+                      <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Border x:Name="PadUp" Classes="padkey"><TextBlock Text="↑" /></Border>
+                        <Border x:Name="PadDown" Classes="padkey"><TextBlock Text="↓" /></Border>
+                        <Border x:Name="PadLeft" Classes="padkey"><TextBlock Text="←" /></Border>
+                        <Border x:Name="PadRight" Classes="padkey"><TextBlock Text="→" /></Border>
+                        <Border Width="16" />
+                        <Border x:Name="PadCross" Classes="padkey"><TextBlock Text="✕" /></Border>
+                        <Border x:Name="PadCircle" Classes="padkey"><TextBlock Text="◯" /></Border>
+                        <Border x:Name="PadSquare" Classes="padkey"><TextBlock Text="□" /></Border>
+                        <Border x:Name="PadTriangle" Classes="padkey"><TextBlock Text="△" /></Border>
+                      </StackPanel>
+
+                      <!-- Shoulders + stick clicks + system -->
+                      <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Border x:Name="PadL1" Classes="padkey"><TextBlock Text="L1" /></Border>
+                        <Border x:Name="PadR1" Classes="padkey"><TextBlock Text="R1" /></Border>
+                        <Border x:Name="PadL2" Classes="padkey"><TextBlock Text="L2" /></Border>
+                        <Border x:Name="PadR2" Classes="padkey"><TextBlock Text="R2" /></Border>
+                        <Border x:Name="PadL3" Classes="padkey"><TextBlock Text="L3" /></Border>
+                        <Border x:Name="PadR3" Classes="padkey"><TextBlock Text="R3" /></Border>
+                        <Border x:Name="PadOptions" Classes="padkey" MinWidth="86"><TextBlock Text="Options" /></Border>
+                        <Border x:Name="PadTouchPad" Classes="padkey" MinWidth="96"><TextBlock Text="Touchpad" /></Border>
+                      </StackPanel>
+
+                      <!-- Analog sticks + triggers -->
+                      <StackPanel Orientation="Horizontal" Spacing="40" Margin="0,4,0,0">
+                        <StackPanel Spacing="8">
+                          <TextBlock Text="LEFT STICK" Classes="sectionTitle" />
+                          <Border Width="84" Height="84" CornerRadius="999" Background="#16FFFFFF" ClipToBounds="True">
+                            <Ellipse x:Name="PadLeftStickDot" Width="18" Height="18" Fill="White"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center">
+                              <Ellipse.RenderTransform><TranslateTransform /></Ellipse.RenderTransform>
+                            </Ellipse>
+                          </Border>
+                        </StackPanel>
+
+                        <StackPanel Spacing="8">
+                          <TextBlock Text="RIGHT STICK" Classes="sectionTitle" />
+                          <Border Width="84" Height="84" CornerRadius="999" Background="#16FFFFFF" ClipToBounds="True">
+                            <Ellipse x:Name="PadRightStickDot" Width="18" Height="18" Fill="White"
+                                     HorizontalAlignment="Center" VerticalAlignment="Center">
+                              <Ellipse.RenderTransform><TranslateTransform /></Ellipse.RenderTransform>
+                            </Ellipse>
+                          </Border>
+                        </StackPanel>
+
+                        <StackPanel Spacing="14" VerticalAlignment="Center">
+                          <StackPanel Spacing="6">
+                            <TextBlock Text="L2 TRIGGER" Classes="sectionTitle" />
+                            <Border Width="150" Height="10" CornerRadius="999" Background="#16FFFFFF">
+                              <Border x:Name="PadL2Bar" Width="0" Height="10" CornerRadius="999"
+                                      Background="{StaticResource AccentBrush}" HorizontalAlignment="Left" />
+                            </Border>
+                          </StackPanel>
+                          <StackPanel Spacing="6">
+                            <TextBlock Text="R2 TRIGGER" Classes="sectionTitle" />
+                            <Border Width="150" Height="10" CornerRadius="999" Background="#16FFFFFF">
+                              <Border x:Name="PadR2Bar" Width="0" Height="10" CornerRadius="999"
+                                      Background="{StaticResource AccentBrush}" HorizontalAlignment="Left" />
+                            </Border>
+                          </StackPanel>
+                        </StackPanel>
+                      </StackPanel>
+
+                      <Button x:Name="RumbleTestButton" Classes="ghost" Content="↯  Test rumble"
+                              HorizontalAlignment="Left" Margin="0,4,0,0" />
+                    </StackPanel>
+                  </Border>
+
+                  <!-- Keyboard fallback reference -->
+                  <Border Classes="card">
+                    <StackPanel Spacing="10">
+                      <TextBlock Classes="sectionTitle" Text="KEYBOARD FALLBACK" />
+                      <TextBlock Text="When no controller is connected, these keys act as the pad:"
+                                 FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" />
+                      <TextBlock FontSize="12" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"
+                                 Text="Arrow keys = D-pad · WASD = left stick · IJKL = right stick · Z/Enter = ✕ · X/Esc = ◯ · C = □ · V = △ · Q/E = L1/R1 · R/F = L2/R2 · Tab/Backspace = Options" />
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+              </ScrollViewer>
+            </TabItem>
             <TabItem x:Name="EnvTabItem" Header="Environment" FontSize="15">
               <ScrollViewer>
                 <StackPanel Margin="0,14,0,16" Spacing="16" MaxWidth="1280" HorizontalAlignment="Left">
@@ -501,79 +656,111 @@ SPDX-License-Identifier: GPL-2.0-or-later
         </Grid>
       </Border>
 
-      <!-- Launch bar; capped so it does not sprawl on a maximized window. -->
-      <Border Grid.Row="3" Classes="card" Margin="0,12,0,0" Padding="14" MaxWidth="1280">
-        <StackPanel Spacing="14">
-          <Grid ColumnDefinitions="Auto,*,Auto">
+      <!-- PS5-style hero bar: no card chrome, just the selected game's name
+           in large type over the key art, with the white Play capsule. -->
+      <Grid Grid.Row="3" Margin="8,18,8,10" ColumnDefinitions="Auto,*,Auto">
 
-            <!-- Selected game cover thumbnail -->
-            <Border Grid.Column="0" Classes="coverClip" Width="56" Height="56" CornerRadius="8"
-                    VerticalAlignment="Center">
-              <Panel x:Name="SelectedCoverPanel">
-                <Border Background="{Binding PlaceholderBrush, FallbackValue={x:Null}}"
-                        IsVisible="{Binding !HasCover, FallbackValue=False}">
-                  <TextBlock Text="{Binding Initials}" FontSize="20" FontWeight="Bold"
-                             Foreground="#E8ECF4" Opacity="0.85"
-                             HorizontalAlignment="Center" VerticalAlignment="Center" />
-                </Border>
-                <Image Source="{Binding Cover}" Stretch="UniformToFill"
-                       IsVisible="{Binding HasCover, FallbackValue=False}" />
-              </Panel>
+        <!-- Selected game cover thumbnail -->
+        <Border Grid.Column="0" Classes="coverClip" Width="72" Height="72" CornerRadius="14"
+                VerticalAlignment="Center">
+          <Panel x:Name="SelectedCoverPanel">
+            <Border Background="{Binding PlaceholderBrush, FallbackValue={x:Null}}"
+                    IsVisible="{Binding !HasCover, FallbackValue=False}">
+              <TextBlock Text="{Binding Initials}" FontSize="24" FontWeight="Bold"
+                         Foreground="#E8ECF4" Opacity="0.85"
+                         HorizontalAlignment="Center" VerticalAlignment="Center" />
             </Border>
+            <Image Source="{Binding Cover}" Stretch="UniformToFill"
+                   IsVisible="{Binding HasCover, FallbackValue=False}" />
+          </Panel>
+        </Border>
 
-            <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center" Margin="14,0,14,0">
-              <Grid ColumnDefinitions="Auto,Auto,*">
-                <TextBlock Grid.Column="0" x:Name="SelectedGameTitle" Text="No game selected" FontSize="16"
-                           FontWeight="Bold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
-                           MaxWidth="340" Margin="0,0,10,0" />
+        <StackPanel Grid.Column="1" Spacing="5" VerticalAlignment="Center" Margin="20,0,20,0">
+          <Grid ColumnDefinitions="Auto,Auto,*">
+            <TextBlock Grid.Column="0" x:Name="SelectedGameTitle" Text="No game selected" FontSize="30"
+                       FontWeight="Bold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                       MaxWidth="620" Margin="0,0,14,0">
+              <TextBlock.Effect>
+                <DropShadowEffect Color="#B0000000" BlurRadius="14" OffsetX="0" OffsetY="2" />
+              </TextBlock.Effect>
+            </TextBlock>
 
-                <!-- Title id / version / size badges, right next to the
-                     title. The title's own MaxWidth (not a "*" column) is
-                     what keeps them from drifting to the far right. -->
-                <StackPanel Grid.Column="1" x:Name="SelectedBadgesRow" Orientation="Horizontal" Spacing="6"
-                            IsVisible="False" VerticalAlignment="Center">
-                  <Border Classes="pill" IsVisible="{Binding HasTitleId, FallbackValue=False}">
-                    <TextBlock Text="{Binding TitleId}" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{StaticResource MutedBrush}" />
-                  </Border>
-                  <Border Classes="pill" IsVisible="{Binding HasVersion, FallbackValue=False}">
-                    <TextBlock Text="{Binding VersionText}" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{StaticResource MutedBrush}" />
-                  </Border>
-                  <Border Classes="pill">
-                    <TextBlock Text="{Binding SizeText, FallbackValue=''}" FontSize="10" FontWeight="SemiBold"
-                               Foreground="{StaticResource MutedBrush}" />
-                  </Border>
-                </StackPanel>
-              </Grid>
-
-              <TextBlock x:Name="SelectedGamePath" Text="Pick a game from the library, or open an eboot.bin directly."
-                         FontSize="11" Foreground="{StaticResource MutedBrush}" TextTrimming="CharacterEllipsis" />
-              <StackPanel Orientation="Horizontal" Spacing="7">
-                <Ellipse x:Name="StatusDot" Width="8" Height="8" Fill="{StaticResource FaintBrush}"
-                         VerticalAlignment="Center" />
-                <TextBlock x:Name="StatusText" Text="Idle" FontSize="11" Foreground="{StaticResource MutedBrush}"
-                           VerticalAlignment="Center" />
-              </StackPanel>
-            </StackPanel>
-
-            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-              <ToggleButton x:Name="ConsoleToggle" Classes="ghost" Content="≡ Console" />
-              <Button x:Name="LaunchButton" Classes="accent" Content="▶  Launch" IsEnabled="False" />
-              <Button x:Name="StopButton" Classes="danger" Content="■  Stop" IsEnabled="False" />
+            <!-- Title id / version / size badges, right next to the
+                 title. The title's own MaxWidth (not a "*" column) is
+                 what keeps them from drifting to the far right. -->
+            <StackPanel Grid.Column="1" x:Name="SelectedBadgesRow" Orientation="Horizontal" Spacing="6"
+                        IsVisible="False" VerticalAlignment="Center">
+              <Border Classes="pill" IsVisible="{Binding HasTitleId, FallbackValue=False}">
+                <TextBlock Text="{Binding TitleId}" FontSize="10" FontWeight="SemiBold"
+                           Foreground="{StaticResource MutedBrush}" />
+              </Border>
+              <Border Classes="pill" IsVisible="{Binding HasVersion, FallbackValue=False}">
+                <TextBlock Text="{Binding VersionText}" FontSize="10" FontWeight="SemiBold"
+                           Foreground="{StaticResource MutedBrush}" />
+              </Border>
+              <Border Classes="pill">
+                <TextBlock Text="{Binding SizeText, FallbackValue=''}" FontSize="10" FontWeight="SemiBold"
+                           Foreground="{StaticResource MutedBrush}" />
+              </Border>
             </StackPanel>
           </Grid>
+
+          <TextBlock x:Name="SelectedGamePath" Text="Pick a game from the library, or open an eboot.bin directly."
+                     FontSize="11" Foreground="{StaticResource MutedBrush}" TextTrimming="CharacterEllipsis" />
+          <StackPanel Orientation="Horizontal" Spacing="7">
+            <Ellipse x:Name="StatusDot" Width="8" Height="8" Fill="{StaticResource FaintBrush}"
+                     VerticalAlignment="Center" />
+            <TextBlock x:Name="StatusText" Text="Idle" FontSize="11" Foreground="{StaticResource MutedBrush}"
+                       VerticalAlignment="Center" />
+          </StackPanel>
         </StackPanel>
-      </Border>
+
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+          <ToggleButton x:Name="ConsoleToggle" Classes="ghost" Content="≡ Console" />
+          <Button x:Name="LaunchButton" Classes="play" Content="▶  Launch" IsEnabled="False" />
+          <Button x:Name="StopButton" Classes="danger" Content="■  Stop" IsEnabled="False" />
+        </StackPanel>
+      </Grid>
     </Grid>
 
-    <!-- Status bar -->
-    <Grid x:Name="StatusBar" Grid.Row="2" Height="32" Background="{StaticResource ChromeBrush}"
-          ColumnDefinitions="*,Auto">
+    <!-- Status bar; also carries the PS5-style controller hint row on the
+         right (✕ launch / ◯ stop), the way the console shows button prompts
+         along the bottom edge. -->
+    <Grid x:Name="StatusBar" Grid.Row="2" Height="34" Background="{StaticResource ChromeBrush}"
+          ColumnDefinitions="*,Auto,Auto">
       <TextBlock x:Name="EmulatorPathText" Grid.Column="0" Text="Emulator: locating…" FontSize="11"
                  Foreground="{StaticResource FaintBrush}" VerticalAlignment="Center" Margin="16,0"
                  TextTrimming="CharacterEllipsis" />
-      <TextBlock x:Name="StatusBarRight" Grid.Column="1" Text="" FontSize="11"
+
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="18" VerticalAlignment="Center"
+                  Margin="16,0">
+        <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+          <Border Width="19" Height="19" CornerRadius="999" Background="#30FFFFFF" VerticalAlignment="Center">
+            <TextBlock Text="✕" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+          </Border>
+          <TextBlock Text="Launch" FontSize="11" Foreground="{StaticResource MutedBrush}"
+                     VerticalAlignment="Center" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+          <Border Width="19" Height="19" CornerRadius="999" Background="#30FFFFFF" VerticalAlignment="Center">
+            <TextBlock Text="◯" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+          </Border>
+          <TextBlock Text="Stop" FontSize="11" Foreground="{StaticResource MutedBrush}"
+                     VerticalAlignment="Center" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+          <Border CornerRadius="999" Background="#30FFFFFF" Padding="7,2" VerticalAlignment="Center">
+            <TextBlock Text="L1 · R1" FontSize="10" FontWeight="Bold" HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+          </Border>
+          <TextBlock Text="Switch page" FontSize="11" Foreground="{StaticResource MutedBrush}"
+                     VerticalAlignment="Center" />
+        </StackPanel>
+      </StackPanel>
+
+      <TextBlock x:Name="StatusBarRight" Grid.Column="2" Text="" FontSize="11"
                  Foreground="{StaticResource FaintBrush}" VerticalAlignment="Center" Margin="16,0" />
     </Grid>
   </Grid>

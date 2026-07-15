@@ -20,6 +20,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
+using Ellipse = Avalonia.Controls.Shapes.Ellipse;
 
 namespace SharpEmu.GUI;
 
@@ -61,13 +62,21 @@ public partial class MainWindow : Window
     private int _detailLoadGeneration;
     private int _backdropGeneration;
 
-    // Controller navigation state.
+    // Controller navigation state. The library is a single horizontal
+    // strip (PS5 home style), so only left/right move the selection.
     private readonly DispatcherTimer _gamepadTimer;
     private HostGamepadButtons _previousPadButtons;
     private long _navLeftNextAt;
     private long _navRightNextAt;
-    private long _navUpNextAt;
-    private long _navDownNextAt;
+
+    // Live controller tester (Options → Controller tab): each entry maps a
+    // physical button to the chip that lights up while it is held.
+    private readonly List<(HostGamepadButtons Flag, Border Indicator)> _testerButtons = new();
+    private static readonly IBrush ConnectedBrush = new SolidColorBrush(Color.Parse("#46C46B"));
+    private static readonly IBrush DisconnectedBrush = new SolidColorBrush(Color.Parse("#5E6A7E"));
+
+    // Top-right clock, PS5 home-screen style.
+    private readonly DispatcherTimer _clockTimer;
 
     public MainWindow()
     {
@@ -86,6 +95,14 @@ public partial class MainWindow : Window
             MaybeAutoScroll();
         };
         _consoleFlushTimer.Start();
+
+        ClockText.Text = DateTime.Now.ToString("HH:mm");
+        _clockTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        _clockTimer.Tick += (_, _) => ClockText.Text = DateTime.Now.ToString("HH:mm");
+        _clockTimer.Start();
 
         TitleBar.PointerPressed += OnTitleBarPointerPressed;
         GameList.SelectionChanged += (_, _) => UpdateSelectedGame();
@@ -161,6 +178,25 @@ public partial class MainWindow : Window
         _gamepadTimer.Tick += (_, _) => PollGamepad();
         _gamepadTimer.Start();
 
+        _testerButtons.Add((HostGamepadButtons.Up, PadUp));
+        _testerButtons.Add((HostGamepadButtons.Down, PadDown));
+        _testerButtons.Add((HostGamepadButtons.Left, PadLeft));
+        _testerButtons.Add((HostGamepadButtons.Right, PadRight));
+        _testerButtons.Add((HostGamepadButtons.Cross, PadCross));
+        _testerButtons.Add((HostGamepadButtons.Circle, PadCircle));
+        _testerButtons.Add((HostGamepadButtons.Square, PadSquare));
+        _testerButtons.Add((HostGamepadButtons.Triangle, PadTriangle));
+        _testerButtons.Add((HostGamepadButtons.L1, PadL1));
+        _testerButtons.Add((HostGamepadButtons.R1, PadR1));
+        _testerButtons.Add((HostGamepadButtons.L2, PadL2));
+        _testerButtons.Add((HostGamepadButtons.R2, PadR2));
+        _testerButtons.Add((HostGamepadButtons.L3, PadL3));
+        _testerButtons.Add((HostGamepadButtons.R3, PadR3));
+        _testerButtons.Add((HostGamepadButtons.Options, PadOptions));
+        _testerButtons.Add((HostGamepadButtons.TouchPad, PadTouchPad));
+
+        RumbleTestButton.Click += async (_, _) => await TestRumbleAsync();
+
 
         GithubButton.Click += (_, _) =>
         {
@@ -225,7 +261,17 @@ public partial class MainWindow : Window
     private void PollGamepad()
     {
         // DualSense wins when both are connected; XInput covers Xbox pads.
-        if (!WindowsDualSenseReader.TryGetState(out var pad) && !WindowsXInputReader.TryGetState(out pad))
+        var isDualSense = WindowsDualSenseReader.TryGetState(out var pad);
+        var connected = isDualSense || WindowsXInputReader.TryGetState(out pad);
+        var padName = isDualSense ? "DualSense" : connected ? "Xbox controller" : null;
+
+        // Feed the live tester whenever its tab is on screen, connected or not.
+        if (IsActive && OptionsPage.IsVisible && ControllerTabItem.IsSelected)
+        {
+            UpdateControllerTester(connected, pad, padName);
+        }
+
+        if (!connected)
         {
             _previousPadButtons = HostGamepadButtons.None;
             return;
@@ -259,8 +305,6 @@ public partial class MainWindow : Window
         var now = Environment.TickCount64;
         var left = (pad.Buttons & HostGamepadButtons.Left) != 0 || pad.LeftX < 64;
         var right = (pad.Buttons & HostGamepadButtons.Right) != 0 || pad.LeftX > 192;
-        var up = (pad.Buttons & HostGamepadButtons.Up) != 0 || pad.LeftY < 64;
-        var down = (pad.Buttons & HostGamepadButtons.Down) != 0 || pad.LeftY > 192;
 
         if (ShouldNavigate(left, ref _navLeftNextAt, now))
         {
@@ -270,16 +314,6 @@ public partial class MainWindow : Window
         if (ShouldNavigate(right, ref _navRightNextAt, now))
         {
             MoveSelection(1);
-        }
-
-        if (ShouldNavigate(up, ref _navUpNextAt, now))
-        {
-            MoveSelection(-TilesPerRow());
-        }
-
-        if (ShouldNavigate(down, ref _navDownNextAt, now))
-        {
-            MoveSelection(TilesPerRow());
         }
 
         var pressed = pad.Buttons & ~_previousPadButtons;
@@ -337,12 +371,71 @@ public partial class MainWindow : Window
         GameList.ScrollIntoView(index);
     }
 
-    private int TilesPerRow()
+    // ---- Controller tester (Options → Controller tab) ----
+
+    private void UpdateControllerTester(bool connected, HostGamepadState pad, string? name)
     {
-        // Tile footprint: 128 content + 20 item padding + 10 item margin.
-        const double TileOuterWidth = 158;
-        var width = GameList.Bounds.Width;
-        return width > TileOuterWidth ? (int)(width / TileOuterWidth) : 1;
+        if (connected)
+        {
+            ControllerStatusDot.Fill = ConnectedBrush;
+            ControllerStatusText.Text = $"Connected: {name}";
+            ControllerStatusDetail.Text = "Press buttons on your controller — they light up below.";
+        }
+        else
+        {
+            ControllerStatusDot.Fill = DisconnectedBrush;
+            ControllerStatusText.Text = "No controller connected";
+            ControllerStatusDetail.Text =
+                "Connect a DualSense or Xbox controller — it is detected automatically.";
+        }
+
+        foreach (var (flag, indicator) in _testerButtons)
+        {
+            var pressed = connected && (pad.Buttons & flag) != 0;
+            if (pressed && !indicator.Classes.Contains("on"))
+            {
+                indicator.Classes.Add("on");
+            }
+            else if (!pressed)
+            {
+                indicator.Classes.Remove("on");
+            }
+        }
+
+        const double StickRadius = 30;
+        SetStickDot(PadLeftStickDot, connected ? pad.LeftX : (byte)128,
+            connected ? pad.LeftY : (byte)128, StickRadius);
+        SetStickDot(PadRightStickDot, connected ? pad.RightX : (byte)128,
+            connected ? pad.RightY : (byte)128, StickRadius);
+
+        const double TriggerTrackWidth = 150;
+        PadL2Bar.Width = connected ? pad.LeftTrigger / 255.0 * TriggerTrackWidth : 0;
+        PadR2Bar.Width = connected ? pad.RightTrigger / 255.0 * TriggerTrackWidth : 0;
+    }
+
+    private static void SetStickDot(Ellipse dot, byte x, byte y, double radius)
+    {
+        // Sticks are 0..255 with 128 centered and Y already growing downward,
+        // which matches screen coordinates, so no axis flip is needed.
+        var transform = dot.RenderTransform as TranslateTransform ?? new TranslateTransform();
+        transform.X = (x - 128) / 128.0 * radius;
+        transform.Y = (y - 128) / 128.0 * radius;
+        dot.RenderTransform = transform;
+    }
+
+    private async Task TestRumbleAsync()
+    {
+        WindowsDualSenseReader.SetRumble(210, 190);
+        WindowsXInputReader.SetRumble(210, 190);
+        try
+        {
+            await Task.Delay(450);
+        }
+        finally
+        {
+            WindowsDualSenseReader.SetRumble(0, 0);
+            WindowsXInputReader.SetRumble(0, 0);
+        }
     }
 
     private async Task OnOpenedAsync()
@@ -401,10 +494,16 @@ public partial class MainWindow : Window
         LibraryTabButton.Content = loc.Get("Page.Library");
         OptionsTabButton.Content = loc.Get("Page.Options");
 
-        SearchBox.Watermark = loc.Get("Library.SearchWatermark");
-        AddFolderButton.Content = loc.Get("Library.AddFolder");
-        RescanButton.Content = loc.Get("Library.Rescan");
-        OpenFileButton.Content = loc.Get("Library.OpenFile");
+        SearchBox.Watermark = "🔍  " + loc.Get("Library.SearchWatermark");
+        // The toolbar buttons are round PS5-style icons; keep the glyph as
+        // their content and surface the translated label as a tooltip, so
+        // localization never overwrites the icon with clipped text.
+        AddFolderButton.Content = "＋";
+        ToolTip.SetTip(AddFolderButton, loc.Get("Library.AddFolder"));
+        RescanButton.Content = "⟳";
+        ToolTip.SetTip(RescanButton, loc.Get("Library.Rescan"));
+        OpenFileButton.Content = "📂";
+        ToolTip.SetTip(OpenFileButton, loc.Get("Library.OpenFile"));
 
         CtxLaunch.Header = loc.Get("Library.Context.Launch");
         CtxOpenFolder.Header = loc.Get("Library.Context.OpenFolder");
@@ -570,6 +669,7 @@ public partial class MainWindow : Window
     {
         _settings.Save();
         _consoleFlushTimer.Stop();
+        _clockTimer.Stop();
         _gamepadTimer.Stop();
         _sndPreview.Stop();
         _discord?.Dispose();
